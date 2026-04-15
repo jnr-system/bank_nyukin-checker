@@ -1,0 +1,6 @@
+requests
+pandas
+gspread
+google-auth
+google-generativeai
+python-dotenv
