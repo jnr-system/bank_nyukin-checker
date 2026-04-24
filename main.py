@@ -29,7 +29,7 @@ LOG_DIR = Path("logs")
 LOG_FILE = LOG_DIR / "matching.log"
 
 
-def setup_logging(dry_run: bool) -> None:
+def setup_logging(dry_run: bool, sheet_only: bool = False) -> None:
     LOG_DIR.mkdir(exist_ok=True)
 
     log_format = "%(asctime)s [%(levelname)s] %(message)s"
@@ -44,7 +44,12 @@ def setup_logging(dry_run: bool) -> None:
         handlers=handlers,
     )
 
-    mode = "DRY-RUN" if dry_run else "本番"
+    if dry_run:
+        mode = "DRY-RUN"
+    elif sheet_only:
+        mode = "スプシのみ"
+    else:
+        mode = "本番"
     logging.getLogger(__name__).info(f"=== 銀行振込照合ツール 起動（{mode}モード）===")
 
 
@@ -58,6 +63,11 @@ def main() -> None:
         help="ドライラン（スプシ・楽楽への書き込みを行わない）",
     )
     parser.add_argument(
+        "--sheet-only",
+        action="store_true",
+        help="スプシのみ更新（楽楽フラグ更新・SMS送信はスキップ）",
+    )
+    parser.add_argument(
         "--sheet",
         default=None,
         metavar="YYYYMM",
@@ -65,10 +75,11 @@ def main() -> None:
     )
     args = parser.parse_args()
     dry_run: bool = args.dry_run
+    sheet_only: bool = args.sheet_only
     sheet_name: str | None = args.sheet
 
     load_dotenv()
-    setup_logging(dry_run)
+    setup_logging(dry_run, sheet_only)
     logger = logging.getLogger(__name__)
 
     # ── 1. スプレッドシート読み込み ──────────────────────────────────────
@@ -82,7 +93,13 @@ def main() -> None:
 
     # ── 2. 楽楽販売 顧客データ全件取得 ──────────────────────────────────
     logger.info("楽楽販売から顧客データを取得中...")
-    rakuraku_records = rakuraku.fetch_all_records()
+    all_records = rakuraku.fetch_all_records()
+
+    # 「進捗」列に「重複」が含まれるレコードを除外
+    rakuraku_records = [r for r in all_records if "重複" not in r.get("進捗", "")]
+    excluded = len(all_records) - len(rakuraku_records)
+    if excluded:
+        logger.info(f"楽楽販売: 重複レコード {excluded}件を除外（残り{len(rakuraku_records)}件）")
 
     # 「銀振照合済み」が既に「入金確認済み」のレコードをインデックス化
     already_confirmed_ids = {
@@ -117,6 +134,7 @@ def main() -> None:
 
         if result_type == MatchResult.SKIP:
             logger.info(f"行{row_idx}: [{d_value}] → スキップ（法人・手数料等）")
+            spreadsheet.write_result(ws, row_idx, "要確認", dry_run=dry_run)
             stats["skip"] += 1
             continue
 
@@ -127,31 +145,36 @@ def main() -> None:
             # 楽楽側が既に入金確認済みの場合もスキップ
             if rec_id in already_confirmed_ids:
                 logger.info(f"行{row_idx}: [{d_value}] → 楽楽側で既に入金確認済み（スキップ）")
+                spreadsheet.write_result(ws, row_idx, "照合済み（楽楽確認済み）", dry_run=dry_run)
                 stats["already_confirmed"] += 1
                 continue
 
             # スプシB列に照合済み（手配番号）を書き込み
             spreadsheet.write_result(ws, row_idx, f"照合済み（{tebai_no}）", dry_run=dry_run)
 
-            # 楽楽販売フラグ更新（成約管理DB + 問合せ管理DB）
-            toiawase_id = matched_rec.get("問い合わせ管理リンク", "").strip()
-            rakuraku.update_kinfu_flags(rec_id, toiawase_id, dry_run=dry_run)
-
-            # SMS送信（電話番号_1 → なければ _2 を使用）
-            telno = ""
-            for col in TELNO_COLUMNS:
-                telno = matched_rec.get(col, "").strip()
-                if telno:
-                    break
-
-            if telno:
-                ok = sms.send_sms(telno, tebai_no, dry_run=dry_run)
-                if ok:
-                    stats["sms_sent"] += 1
-                else:
-                    stats["sms_failed"] += 1
+            # 楽楽販売フラグ更新・SMS送信（sheet_onlyモードはスキップ）
+            if sheet_only:
+                logger.info(f"行{row_idx}: [{d_value}] → [SHEET-ONLY] 楽楽更新・SMS送信スキップ")
             else:
-                logger.warning(f"行{row_idx}: [{d_value}] → 電話番号未登録のためSMSスキップ")
+                # 楽楽販売フラグ更新（成約管理DB + 問合せ管理DB）
+                toiawase_id = matched_rec.get("問い合わせ管理リンク", "").strip()
+                rakuraku.update_kinfu_flags(rec_id, toiawase_id, dry_run=dry_run)
+
+                # SMS送信（電話番号_1 → なければ _2 を使用）
+                telno = ""
+                for col in TELNO_COLUMNS:
+                    telno = matched_rec.get(col, "").strip()
+                    if telno:
+                        break
+
+                if telno:
+                    ok = sms.send_sms(telno, tebai_no, dry_run=dry_run)
+                    if ok:
+                        stats["sms_sent"] += 1
+                    else:
+                        stats["sms_failed"] += 1
+                else:
+                    logger.warning(f"行{row_idx}: [{d_value}] → 電話番号未登録のためSMSスキップ")
 
             stats["matched"] += 1
 

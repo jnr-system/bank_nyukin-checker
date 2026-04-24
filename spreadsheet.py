@@ -82,6 +82,19 @@ def write_result(
         return
 
     worksheet.update_cell(row_index, 2, result)
+
+    cell_addr = f"B{row_index}"
+    if result.startswith("要確認"):
+        worksheet.format(cell_addr, {
+            "backgroundColor": {"red": 1.0, "green": 1.0, "blue": 1.0},
+            "textFormat": {"foregroundColor": {"red": 1.0, "green": 0.0, "blue": 0.0}},
+        })
+    else:
+        worksheet.format(cell_addr, {
+            "backgroundColor": {"red": 1.0, "green": 1.0, "blue": 1.0},
+            "textFormat": {"foregroundColor": {"red": 0.0, "green": 0.0, "blue": 0.0}},
+        })
+
     logger.debug(f"スプレッドシート: 行{row_index} B列 ← {result!r}")
 
 

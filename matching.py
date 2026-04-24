@@ -11,6 +11,9 @@ logger = logging.getLogger(__name__)
 
 GEMINI_MODEL = "gemini-3-flash-preview"
 
+# 楽楽販売CSVの振込識別番号列名
+FURIKOMI_ID_COLUMN = "振込識別番号"
+
 # 楽楽販売CSVのフリカナ列名（優先順）
 KANA_COLUMNS = (
     'フリカナ（フォーム申込者）',
@@ -26,6 +29,26 @@ def _get_kana(rec: dict) -> str:
         if kana:
             return kana
     return ''
+
+
+# ── 振込識別番号の抽出 ───────────────────────────────────────────────────
+
+def extract_furikomi_id(raw: str) -> str | None:
+    """口座名義の先頭にある振込識別番号（数字列）を抽出する。全角数字も半角に変換。なければNone。"""
+    s = unicodedata.normalize('NFKC', raw).strip()  # 全角数字→半角
+    m = re.match(r'^(\d+)\s*', s)
+    if m:
+        return m.group(1)
+    return None
+
+
+def find_furikomi_match(furikomi_id: str, rakuraku_records: list[dict]) -> dict | None:
+    """振込識別番号で楽楽レコードを検索する（楽楽側も半角に正規化して比較）"""
+    for rec in rakuraku_records:
+        val = unicodedata.normalize('NFKC', rec.get(FURIKOMI_ID_COLUMN, "").strip())
+        if val and val == furikomi_id:
+            return rec
+    return None
 
 
 # ── ステップ1：照合スキップ行の判定 ─────────────────────────────────────
@@ -192,6 +215,16 @@ def match_record(raw_bank_name: str, rakuraku_records: list[dict]) -> tuple[str,
     bank_name = extract_name(raw_bank_name)
     if bank_name is None:
         return MatchResult.SKIP, None
+
+    # 第0.5段階：振込識別番号照合
+    furikomi_id = extract_furikomi_id(raw_bank_name)
+    if furikomi_id:
+        matched = find_furikomi_match(furikomi_id, rakuraku_records)
+        if matched:
+            logger.info(f"[識別番号一致] {raw_bank_name} → 振込識別番号={furikomi_id} (注文ID={matched.get('注文ID')})")
+            return MatchResult.MATCHED, matched
+        else:
+            logger.info(f"[識別番号不一致] {raw_bank_name} → 振込識別番号={furikomi_id} に一致なし、カナ照合へ")
 
     bank_normalized = normalize_for_match(bank_name)
 
