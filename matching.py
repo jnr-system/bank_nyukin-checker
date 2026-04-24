@@ -11,6 +11,22 @@ logger = logging.getLogger(__name__)
 
 GEMINI_MODEL = "gemini-3-flash-preview"
 
+# 楽楽販売CSVのフリカナ列名（優先順）
+KANA_COLUMNS = (
+    'フリカナ（フォーム申込者）',
+    '（日程調整）フリカナ',
+    '（日程調整）フリカナ（請求先）',
+)
+
+
+def _get_kana(rec: dict) -> str:
+    """レコードから最初に値があるフリカナを返す"""
+    for col in KANA_COLUMNS:
+        kana = rec.get(col, '').strip()
+        if kana:
+            return kana
+    return ''
+
 
 # ── ステップ1：照合スキップ行の判定 ─────────────────────────────────────
 
@@ -51,14 +67,14 @@ def normalize_bank_name(raw: str) -> str:
     s = re.sub(r'^[０-９0-9\(\)（）「」\-―A-ZＡ-Ｚa-zａ-ｚ]+', '', s).strip()
 
     # 3. 末尾の備考を除去（カナ・スペース・長音符以外が現れた時点で切り捨て）
-    match = re.match(r'^([\u30A0-\u30FF\uFF65-\uFF9Fー\s\u3000\xa0]+)', s)
+    match = re.match(r'^([゠-ヿ･-ﾟー\s　\xa0]+)', s)
     s = match.group(1).strip() if match else s
 
     # 4. 半角カナ → 全角カナ（NFKC正規化）
     s = unicodedata.normalize('NFKC', s)
 
     # 5. あらゆるスペースを半角スペース1つに統一
-    s = re.sub(r'[\s\u3000\xa0]+', ' ', s).strip()
+    s = re.sub(r'[\s　\xa0]+', ' ', s).strip()
 
     return s
 
@@ -79,20 +95,16 @@ def extract_name(raw: str) -> str | None:
 def normalize_for_match(name: str) -> str:
     """照合用に正規化：スペース除去・全角統一"""
     n = unicodedata.normalize('NFKC', name)
-    n = re.sub(r'[\s\u3000\xa0]', '', n)
+    n = re.sub(r'[\s　\xa0]', '', n)
     return n
 
 
 def find_exact_match(bank_normalized: str, rakuraku_records: list[dict]) -> dict | None:
-    """正規化後の完全一致で楽楽レコードを返す"""
+    """正規化後の完全一致で楽楽レコードを返す（3列のいずれかが一致すればOK）"""
     for rec in rakuraku_records:
-        kana = rec.get('フリカナ', '').strip()
-        if kana and normalize_for_match(kana) == bank_normalized:
-            return rec
-        # 請求先フリカナも試みる（カナのみのものに限定）
-        kana2 = rec.get('フリカナ(請求先)', '').strip()
-        if kana2 and re.search(r'^[ァ-ヶ\s\u3000]+$', kana2):
-            if normalize_for_match(kana2) == bank_normalized:
+        for col in KANA_COLUMNS:
+            kana = rec.get(col, '').strip()
+            if kana and normalize_for_match(kana) == bank_normalized:
                 return rec
     return None
 
@@ -100,24 +112,24 @@ def find_exact_match(bank_normalized: str, rakuraku_records: list[dict]) -> dict
 # ── 第2段階：頭文字グルーピング → Gemini一括照合 ─────────────────────────
 
 def get_candidates(bank_normalized: str, rakuraku_records: list[dict]) -> list[dict]:
-    """銀行名の先頭1文字と一致する行グループを返す"""
+    """銀行名の先頭1文字と一致する行グループを返す（3列のいずれかが一致すればOK）"""
     first_char = bank_normalized[0] if bank_normalized else ''
     candidates = []
     for rec in rakuraku_records:
-        kana = rec.get('フリカナ', '').strip()
-        if not kana:
-            continue
-        if not re.search(r'[ァ-ヶ]', kana):
-            continue
-        kana_normalized = normalize_for_match(kana)
-        if kana_normalized and kana_normalized[0] == first_char:
-            candidates.append(rec)
+        for col in KANA_COLUMNS:
+            kana = rec.get(col, '').strip()
+            if not kana or not re.search(r'[ァ-ヶ]', kana):
+                continue
+            kana_normalized = normalize_for_match(kana)
+            if kana_normalized and kana_normalized[0] == first_char:
+                candidates.append(rec)
+                break  # このレコードは追加済みなので次のレコードへ
     return candidates
 
 
 def build_prompt(bank_name: str, candidates: list[dict]) -> str:
     candidate_list = '\n'.join(
-        f"{i+1}: {rec['フリカナ']}"
+        f"{i+1}: {_get_kana(rec)}"
         for i, rec in enumerate(candidates)
     )
     return f"""銀行振込人名（正規化済み・全角カナ）: {bank_name}
@@ -186,7 +198,7 @@ def match_record(raw_bank_name: str, rakuraku_records: list[dict]) -> tuple[str,
     # 第1段階：完全一致
     exact = find_exact_match(bank_normalized, rakuraku_records)
     if exact:
-        logger.info(f"[完全一致] {bank_name} → {exact.get('フリカナ')} (記録ID={exact.get('記録ID')})")
+        logger.info(f"[完全一致] {bank_name} → {_get_kana(exact)} (記録ID={exact.get('記録ID')})")
         return MatchResult.MATCHED, exact
 
     # 第2段階：Gemini照合
@@ -198,7 +210,7 @@ def match_record(raw_bank_name: str, rakuraku_records: list[dict]) -> tuple[str,
     try:
         matched = gemini_match(bank_name, candidates)
         if matched:
-            logger.info(f"[Gemini一致] {bank_name} → {matched.get('フリカナ')} (記録ID={matched.get('記録ID')})")
+            logger.info(f"[Gemini一致] {bank_name} → {_get_kana(matched)} (記録ID={matched.get('記録ID')})")
             return MatchResult.MATCHED, matched
         else:
             logger.info(f"[不一致] {bank_name} → NO_MATCH")

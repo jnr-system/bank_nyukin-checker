@@ -17,7 +17,11 @@ from dotenv import load_dotenv
 
 import rakuraku
 import spreadsheet
+import sms
 from matching import MatchResult, match_record
+
+# 楽楽販売CSVの電話番号列名
+TELNO_COLUMNS = ["（日程調整）請求先電話番号_1", "（日程調整）請求先電話番号_2"]
 
 # ── ログ設定 ─────────────────────────────────────────────────────────────
 
@@ -82,9 +86,9 @@ def main() -> None:
 
     # 「銀振照合済み」が既に「入金確認済み」のレコードをインデックス化
     already_confirmed_ids = {
-        rec.get("記録ID")
+        rec.get("注文ID")
         for rec in rakuraku_records
-        if rec.get("銀振照合済み") == "入金確認済み"
+        if rec.get("銀行振り込み照合済み") == "照合済み"
     }
     logger.info(f"楽楽販売: 既に「入金確認済み」のレコード {len(already_confirmed_ids)}件")
 
@@ -96,6 +100,8 @@ def main() -> None:
         "no_kana": 0,
         "error": 0,
         "already_confirmed": 0,
+        "sms_sent": 0,
+        "sms_failed": 0,
     }
 
     for row in target_rows:
@@ -115,7 +121,7 @@ def main() -> None:
             continue
 
         elif result_type == MatchResult.MATCHED:
-            rec_id = matched_rec.get("記録ID", "")
+            rec_id = matched_rec.get("注文ID", "")
             tebai_no = matched_rec.get("手配番号", "")
 
             # 楽楽側が既に入金確認済みの場合もスキップ
@@ -127,8 +133,25 @@ def main() -> None:
             # スプシB列に照合済み（手配番号）を書き込み
             spreadsheet.write_result(ws, row_idx, f"照合済み（{tebai_no}）", dry_run=dry_run)
 
-            # 楽楽販売フラグ更新
-            rakuraku.update_kinfu_flag(rec_id, dry_run=dry_run)
+            # 楽楽販売フラグ更新（成約管理DB + 問合せ管理DB）
+            toiawase_id = matched_rec.get("問い合わせ管理リンク", "").strip()
+            rakuraku.update_kinfu_flags(rec_id, toiawase_id, dry_run=dry_run)
+
+            # SMS送信（電話番号_1 → なければ _2 を使用）
+            telno = ""
+            for col in TELNO_COLUMNS:
+                telno = matched_rec.get(col, "").strip()
+                if telno:
+                    break
+
+            if telno:
+                ok = sms.send_sms(telno, tebai_no, dry_run=dry_run)
+                if ok:
+                    stats["sms_sent"] += 1
+                else:
+                    stats["sms_failed"] += 1
+            else:
+                logger.warning(f"行{row_idx}: [{d_value}] → 電話番号未登録のためSMSスキップ")
 
             stats["matched"] += 1
 
@@ -152,6 +175,8 @@ def main() -> None:
     logger.info(f"  要確認（エラー）   : {stats['error']}件")
     logger.info(f"  スキップ           : {stats['skip']}件")
     logger.info(f"  楽楽側照合済み済   : {stats['already_confirmed']}件")
+    logger.info(f"  SMS送信成功        : {stats['sms_sent']}件")
+    logger.info(f"  SMS送信失敗        : {stats['sms_failed']}件")
     logger.info(f"  合計処理対象       : {len(target_rows)}行")
 
 
