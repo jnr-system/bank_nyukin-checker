@@ -11,8 +11,9 @@ logger = logging.getLogger(__name__)
 ACCRETE_API_URL = "https://api.acrt.jp/ibss/api/sms_reg/{account_id}/json"
 
 SMS_MESSAGE_TEMPLATE = (
-    "【ご入金確認】手配番号{tebai_no}のお振込みを確認いたしました。"
-    "ありがとうございます。"
+    "【正直屋】平素よりお世話になっております。\n"
+    "この度はご入金いただきありがとうございました。\n"
+    "引き続きどうぞよろしくお願いいたします。"
 )
 
 
