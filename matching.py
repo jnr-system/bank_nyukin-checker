@@ -203,7 +203,31 @@ class MatchResult:
     NO_KANA = "no_kana"
 
 
-def match_record(raw_bank_name: str, rakuraku_records: list[dict]) -> tuple[str, dict | None]:
+def normalize_kanji_for_match(name: str) -> str:
+    """漢字名義用に正規化：スペース除去・全角統一"""
+    n = unicodedata.normalize('NFKC', name)
+    n = re.sub(r'[\s　\xa0]', '', n)
+    return n
+
+def match_record_kanji(raw_bank_name: str, rakuraku_records: list[dict]) -> tuple[str, dict | None]:
+    n_bank = normalize_kanji_for_match(raw_bank_name)
+    if not n_bank:
+        return MatchResult.SKIP, None
+        
+    for rec in rakuraku_records:
+        r_name = rec.get("（日程調整）請求先お名前", "").strip()
+        if not r_name:
+            continue
+        n_r_name = normalize_kanji_for_match(r_name)
+        if n_bank == n_r_name:
+            logger.info(f"[漢字完全一致] {n_bank} (記録ID={rec.get('記録ID')})")
+            return MatchResult.MATCHED, rec
+            
+    logger.info(f"[漢字不一致] {n_bank} → NO_MATCH")
+    return MatchResult.NO_MATCH, None
+
+
+def match_record(raw_bank_name: str, rakuraku_records: list[dict], mode: str = "kana") -> tuple[str, dict | None]:
     """
     1件の銀行口座名義を照合する。
 
@@ -211,6 +235,9 @@ def match_record(raw_bank_name: str, rakuraku_records: list[dict]) -> tuple[str,
         (result_type, matched_record_or_None)
         result_type: MatchResult の定数
     """
+    if mode == "kanji":
+        return match_record_kanji(raw_bank_name, rakuraku_records)
+
     # 第0段階：スキップ判定
     bank_name = extract_name(raw_bank_name)
     if bank_name is None:

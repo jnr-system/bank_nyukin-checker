@@ -19,6 +19,7 @@ SEIYAKU_DB_SCHEMA_ID = "101185"
 LIST_ID = "101490"
 SEARCH_ID = "107915"
 SEIYAKU_KINFU_ITEM_ID = "116378"  # 成約管理の照合済み項目ID
+SEIYAKU_NYUKIN_DATE_ITEM_ID = "111590"  # 入金日項目ID
 
 # 問合せ管理DB（更新のみ）
 TOIAWASE_DB_SCHEMA_ID = "101181"
@@ -65,14 +66,12 @@ def fetch_all_records(limit: int = 5000) -> list[dict]:
     return records
 
 
-def _update_record(db_schema_id: str, record_id: str, item_id: str, label: str) -> bool:
-    """指定DBの指定レコードの項目を「照合済み」に更新する共通処理"""
+def _update_record(db_schema_id: str, record_id: str, values: dict, label: str) -> bool:
+    """指定DBの指定レコードの複数項目を更新する共通処理"""
     payload = {
         "dbSchemaId": db_schema_id,
         "keyId": record_id,
-        "values": {
-            item_id: KINFU_VALUE,
-        },
+        "values": values,
     }
     try:
         resp = requests.post(
@@ -82,7 +81,7 @@ def _update_record(db_schema_id: str, record_id: str, item_id: str, label: str) 
             timeout=30,
         )
         resp.raise_for_status()
-        logger.info(f"楽楽販売({label}): ID={record_id} を「{KINFU_VALUE}」に更新しました")
+        logger.info(f"楽楽販売({label}): ID={record_id} の値を更新しました ({values})")
         time.sleep(REQUEST_INTERVAL)
         return True
     except requests.RequestException as e:
@@ -90,26 +89,37 @@ def _update_record(db_schema_id: str, record_id: str, item_id: str, label: str) 
         return False
 
 
-def update_kinfu_flags(seiyaku_id: str, toiawase_id: str, dry_run: bool = False) -> bool:
+def update_kinfu_flags(seiyaku_id: str, toiawase_id: str, nyukin_date: str = "", dry_run: bool = False) -> bool:
     """
-    成約管理DBと問合せ管理DBの両方の照合済みフラグを更新する。
+    成約管理DBと問合せ管理DBの両方の照合済みフラグを更新する。入金日も更新する。
 
     Args:
         seiyaku_id: 成約管理DBの注文ID
         toiawase_id: 問合せ管理DBの記録ID（問い合わせ管理リンク）
+        nyukin_date: 入金日文字列
         dry_run: Trueの場合は更新せずログのみ出力
 
     Returns:
         bool: 両方成功した場合True
     """
     if dry_run:
-        logger.info(f"[DRY-RUN] 成約管理ID={seiyaku_id} / 問合せ管理ID={toiawase_id} の照合済みを更新（スキップ）")
+        logger.info(f"[DRY-RUN] 成約管理ID={seiyaku_id} / 問合せ管理ID={toiawase_id} の照合済み・入金日({nyukin_date})を更新（スキップ）")
         return True
 
-    ok1 = _update_record(SEIYAKU_DB_SCHEMA_ID, seiyaku_id, SEIYAKU_KINFU_ITEM_ID, "成約管理")
+    seiyaku_values = {
+        SEIYAKU_KINFU_ITEM_ID: KINFU_VALUE,
+    }
+    if nyukin_date:
+        seiyaku_values[SEIYAKU_NYUKIN_DATE_ITEM_ID] = nyukin_date
+
+    ok1 = _update_record(SEIYAKU_DB_SCHEMA_ID, seiyaku_id, seiyaku_values, "成約管理")
+    
     ok2 = True
     if toiawase_id:
-        ok2 = _update_record(TOIAWASE_DB_SCHEMA_ID, toiawase_id, TOIAWASE_KINFU_ITEM_ID, "問合せ管理")
+        toiawase_values = {
+            TOIAWASE_KINFU_ITEM_ID: KINFU_VALUE,
+        }
+        ok2 = _update_record(TOIAWASE_DB_SCHEMA_ID, toiawase_id, toiawase_values, "問合せ管理")
     else:
         logger.warning(f"成約管理ID={seiyaku_id}: 問い合わせ管理リンクが未設定のため問合せ管理DBの更新をスキップ")
 

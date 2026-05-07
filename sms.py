@@ -11,9 +11,10 @@ logger = logging.getLogger(__name__)
 ACCRETE_API_URL = "https://api.acrt.jp/ibss/api/sms_reg/{account_id}/json"
 
 SMS_MESSAGE_TEMPLATE = (
-    "【正直屋】平素よりお世話になっております。\n"
-    "この度はご入金いただきありがとうございました。\n"
-    "引き続きどうぞよろしくお願いいたします。"
+    "【正直屋】ご入金ありがとうございました。\n"
+    "入金日：{date}\n"
+    "入金金額：{amount}円\n"
+    "今後ともよろしくお願いいたします。"
 )
 
 
@@ -22,13 +23,15 @@ def _clean_phone(telno: str) -> str:
     return telno.replace("-", "").replace(" ", "").replace("　", "").strip()
 
 
-def send_sms(telno: str, tebai_no: str, dry_run: bool = False) -> bool:
+def send_sms(telno: str, tebai_no: str, date: str = "", amount: str = "", dry_run: bool = False) -> bool:
     """
     指定の電話番号にSMSを送信する。
 
     Args:
         telno: 送信先電話番号（ハイフンありでも可）
         tebai_no: 手配番号（メッセージ本文に埋め込む）
+        date: 入金日
+        amount: 入金金額
         dry_run: Trueの場合は送信せずログのみ
 
     Returns:
@@ -47,7 +50,7 @@ def send_sms(telno: str, tebai_no: str, dry_run: bool = False) -> bool:
         logger.warning(f"SMS送信スキップ: 電話番号が空（手配番号={tebai_no}）")
         return False
 
-    message = SMS_MESSAGE_TEMPLATE.format(tebai_no=tebai_no)
+    message = SMS_MESSAGE_TEMPLATE.format(date=date, amount=amount)
 
     if dry_run:
         logger.info(f"[DRY-RUN] SMS送信スキップ: telno={cleaned} tebai_no={tebai_no} 本文={message!r}")

@@ -55,21 +55,30 @@ pip install -r requirements.txt
 |--------|------|
 | `RAKURAKU_TOKEN` | 楽楽販売 APIトークン |
 | `GEMINI_API_KEY` | Google AI Studio で発行したGemini APIキー |
-| `SPREADSHEET_ID` | 対象GoogleスプレッドシートのID |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | GoogleサービスアカウントのJSONを1行で記載 |
 | `ACCRETE_ACCOUNT_ID` | accreteのアカウントID |
 | `ACCRETE_REQUEST_ID` | accreteのリクエストID |
 | `ACCRETE_PASSWORD` | accreteのパスワード |
 
-### 3. スプレッドシートの形式
+### スプレッドシートごとの設定（最大4つまで）
+| 変数名 | 説明 |
+|--------|------|
+| `SPREADSHEET_ID_1` | 1つ目のスプレッドシートID |
+| `SPREADSHEET_MATCH_MODE_1` | 照合モード（`kana` または `kanji`） |
+| `SPREADSHEET_NAME_COL_1` | 口座名義の列（例：`D`） |
+| `SPREADSHEET_DATE_COL_1` | 入金日の列（例：`C`） |
+| `SPREADSHEET_AMOUNT_COL_1`| 入金金額の列（例：`E`） |
 
-シート名は `YYYYMM`（例: `202604`）で、以下の列構成を想定しています。
+※ `_2`, `_3`, `_4` についても同様に設定可能。旧来の `SPREADSHEET_ID` のみの指定も後方互換性で動作します。
+
+シート名は `YYYYMM`（例: `202604`）で、以下の列構成を想定しています（列位置は環境変数で指定）。
 
 | 列 | 内容 |
 |----|------|
-| B | 照合結果（ツールが書き込む） |
-| C | 入金日 |
-| D | 銀行口座名義（照合対象） |
+| A | 照合結果（ツールが書き込む、固定） |
+| 指定 | 入金日 |
+| 指定 | 入金金額 |
+| 指定 | 銀行口座名義（照合対象） |
 
 ## 使い方
 
@@ -97,6 +106,7 @@ python main.py --sheet 202603 --dry-run
 | `照合済み（手配番号）` | 照合成功 |
 | `照合済み（楽楽確認済み）` | 楽楽側で既に照合済みのためスキップ |
 | `要確認`（赤文字） | 照合失敗・スキップ対象（法人等） |
+| `要確認（金額不一致）`（赤文字） | 口座名義は一致したが金額が不一致 |
 | `要確認（フリカナ未登録）`（赤文字） | 楽楽にフリカナ未登録のため照合不可 |
 | `要確認（エラー）`（赤文字） | 照合処理中にエラー発生 |
 
