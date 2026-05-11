@@ -122,12 +122,14 @@ def main() -> None:
     for i in range(1, 5):
         sp_id = os.environ.get(f"SPREADSHEET_ID_{i}")
         if sp_id:
+            sms_flag = os.environ.get(f"SPREADSHEET_SMS_{i}", "false").lower() == "true"
             SPREADSHEETS_CONFIG.append({
                 "id": sp_id,
                 "mode": os.environ.get(f"SPREADSHEET_MATCH_MODE_{i}", "kana"),
                 "name_col": os.environ.get(f"SPREADSHEET_NAME_COL_{i}", "D"),
                 "date_col": os.environ.get(f"SPREADSHEET_DATE_COL_{i}", "C"),
                 "amount_col": os.environ.get(f"SPREADSHEET_AMOUNT_COL_{i}", "E"),
+                "send_sms": sms_flag,
             })
     
     # 後方互換性
@@ -138,6 +140,7 @@ def main() -> None:
             "name_col": "D",
             "date_col": "C",
             "amount_col": "E",
+            "send_sms": True,
         })
 
     logger.info(f"設定されているスプレッドシートは {len(SPREADSHEETS_CONFIG)} 件です。")
@@ -233,21 +236,24 @@ def main() -> None:
                     toiawase_id = matched_rec.get("問い合わせ管理リンク", "").strip()
                     rakuraku.update_kinfu_flags(rec_id, toiawase_id, nyukin_date=date_value, dry_run=dry_run)
 
-                # SMS送信（電話番号_1 → なければ _2 を使用）
-                telno = ""
-                for col in TELNO_COLUMNS:
-                    telno = matched_rec.get(col, "").strip()
-                    if telno:
-                        break
+                # SMS送信（シート設定でsend_sms=Trueの場合のみ）
+                if config.get("send_sms", False):
+                    telno = ""
+                    for col in TELNO_COLUMNS:
+                        telno = matched_rec.get(col, "").strip()
+                        if telno:
+                            break
 
-                if telno:
-                    ok = sms.send_sms(telno, tebai_no, date=date_value, amount=str(amount_value), dry_run=dry_run)
-                    if ok:
-                        stats["sms_sent"] += 1
+                    if telno:
+                        ok = sms.send_sms(telno, tebai_no, date=date_value, amount=str(amount_value), dry_run=dry_run)
+                        if ok:
+                            stats["sms_sent"] += 1
+                        else:
+                            stats["sms_failed"] += 1
                     else:
-                        stats["sms_failed"] += 1
+                        logger.warning(f"行{row_idx}: [{name_value}] → 電話番号未登録のためSMSスキップ")
                 else:
-                    logger.warning(f"行{row_idx}: [{name_value}] → 電話番号未登録のためSMSスキップ")
+                    logger.info(f"行{row_idx}: [{name_value}] → SMS送信なし（シート設定）")
 
                 stats["matched"] += 1
 
