@@ -116,8 +116,9 @@ def update_kinfu_flags(seiyaku_id: str, toiawase_id: str, nyukin_date: str = "",
     
     ok2 = True
     if toiawase_id:
+        toiawase_kinfu_value = f"{nyukin_date} 入金確認済み" if nyukin_date else "入金確認済み"
         toiawase_values = {
-            TOIAWASE_KINFU_ITEM_ID: KINFU_VALUE,
+            TOIAWASE_KINFU_ITEM_ID: toiawase_kinfu_value,
         }
         ok2 = _update_record(TOIAWASE_DB_SCHEMA_ID, toiawase_id, toiawase_values, "問合せ管理")
     else:

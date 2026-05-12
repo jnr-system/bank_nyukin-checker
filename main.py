@@ -197,7 +197,7 @@ def main() -> None:
 
             elif result_type == MatchResult.MATCHED:
                 rec_id = matched_rec.get("注文ID", "")
-                tebai_no = matched_rec.get("手配番号", "")
+                tehai_no = matched_rec.get("手配番号", "")
 
                 # 金額チェック（スプシ・楽楽両方に値があり一致する場合のみ通過）
                 rakuraku_amount = get_rakuraku_amount(matched_rec)
@@ -225,7 +225,7 @@ def main() -> None:
                     continue
 
                 # スプシA列に照合済み（手配番号）を書き込み
-                spreadsheet.write_result(ws, row_idx, f"照合済み（{tebai_no}）", dry_run=dry_run)
+                spreadsheet.write_result(ws, row_idx, f"照合済み（{tehai_no}）", dry_run=dry_run)
                 matched_order_ids.add(rec_id)
 
                 # 楽楽販売フラグ更新・SMS送信（sheet_onlyモードはスキップ）
@@ -245,7 +245,7 @@ def main() -> None:
                             break
 
                     if telno:
-                        ok = sms.send_sms(telno, tebai_no, date=date_value, amount=str(amount_value), dry_run=dry_run)
+                        ok = sms.send_sms(telno, tehai_no, date=date_value, amount=str(amount_value), dry_run=dry_run)
                         if ok:
                             stats["sms_sent"] += 1
                         else:
