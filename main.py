@@ -171,8 +171,8 @@ def main() -> None:
             amount_col=config["amount_col"]
         )
 
-        # 処理対象行を絞る（A列が「照合済み」で始まる行はスキップ）
-        target_rows = [r for r in sheet_rows if not r["result"].startswith("照合済み")]
+        # 処理対象行を絞る（A列に「照合済み」または「要確認」を含む行はスキップ）
+        target_rows = [r for r in sheet_rows if "照合済み" not in r["result"] and "要確認" not in r["result"]]
         total_target_rows += len(target_rows)
         logger.info(f"処理対象: {len(target_rows)}行（全{len(sheet_rows)}行中）")
 
@@ -190,7 +190,8 @@ def main() -> None:
             result_type, matched_rec = match_record(name_value, rakuraku_records, mode=config["mode"])
 
             if result_type == MatchResult.SKIP:
-                logger.info(f"行{row_idx}: [{name_value}] → スキップ（法人・手数料等）")
+                skip_reason = "手配番号が空" if config["mode"] == "tehai" else "法人・手数料等"
+                logger.info(f"行{row_idx}: [{name_value}] → スキップ（{skip_reason}）")
                 spreadsheet.write_result(ws, row_idx, "要確認", dry_run=dry_run)
                 stats["skip"] += 1
                 continue

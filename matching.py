@@ -227,6 +227,19 @@ def match_record_kanji(raw_bank_name: str, rakuraku_records: list[dict]) -> tupl
     return MatchResult.NO_MATCH, None
 
 
+def match_record_tehai(tehai_no: str, rakuraku_records: list[dict]) -> tuple[str, dict | None]:
+    """手配番号の完全一致で楽楽レコードを返す"""
+    n = tehai_no.strip()
+    if not n:
+        return MatchResult.SKIP, None
+    for rec in rakuraku_records:
+        if rec.get("手配番号", "").strip() == n:
+            logger.info(f"[手配番号一致] {n} (記録ID={rec.get('記録ID')})")
+            return MatchResult.MATCHED, rec
+    logger.info(f"[手配番号不一致] {n} → NO_MATCH")
+    return MatchResult.NO_MATCH, None
+
+
 def match_record(raw_bank_name: str, rakuraku_records: list[dict], mode: str = "kana") -> tuple[str, dict | None]:
     """
     1件の銀行口座名義を照合する。
@@ -237,6 +250,9 @@ def match_record(raw_bank_name: str, rakuraku_records: list[dict], mode: str = "
     """
     if mode == "kanji":
         return match_record_kanji(raw_bank_name, rakuraku_records)
+
+    if mode == "tehai":
+        return match_record_tehai(raw_bank_name, rakuraku_records)
 
     # 第0段階：スキップ判定
     bank_name = extract_name(raw_bank_name)
