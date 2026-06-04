@@ -229,12 +229,16 @@ def match_record_kanji(raw_bank_name: str, rakuraku_records: list[dict]) -> tupl
 
 def normalize_tehai_no(tehai_no: str) -> str:
     """手配番号末尾のサフィックスを正規化する
-    - JNR-00001-2  → JNR-00001   （-数字のみ → 丸ごと除去）
+    - JNR-00001-2  → JNR-00001   （-数字のみ → 丸ごと除去、ただし本体部分は残す）
     - JNR-00001-S1 → JNR-00001-S （-英字+数字 → 末尾の数字のみ除去）
+    - JNR-00001    → JNR-00001   （本体の -数字 は除去しない）
     """
     s = tehai_no.strip()
     s = re.sub(r'(-[A-Za-z]+)\d+$', r'\1', s)  # -S1 → -S
-    s = re.sub(r'-\d+$', '', s)                  # -2  → 除去
+    # 末尾の -数字 は、ハイフン区切りが3つ以上ある場合のみ除去（例: JNR-00001-2）
+    # ハイフン区切りが2つ（例: JNR-00001）は本体なので除去しない
+    if s.count('-') >= 2:
+        s = re.sub(r'-\d+$', '', s)
     return s
 
 
