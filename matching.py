@@ -34,11 +34,12 @@ def _get_kana(rec: dict) -> str:
 # ── 振込識別番号の抽出 ───────────────────────────────────────────────────
 
 def extract_furikomi_id(raw: str) -> str | None:
-    """口座名義の先頭にある振込識別番号（数字列）を抽出する。全角数字も半角に変換。なければNone。"""
+    """口座名義のどこかにある振込識別番号（数字列）を抽出する。全角数字も半角に変換。なければNone。"""
     s = unicodedata.normalize('NFKC', raw).strip()  # 全角数字→半角
-    m = re.match(r'^(\d+)\s*', s)
-    if m:
-        return m.group(1)
+    # 数字列をすべて抽出し、最長のものを返す（短い数字は電話番号末尾等のノイズの可能性があるため）
+    nums = re.findall(r'\d+', s)
+    if nums:
+        return max(nums, key=len)
     return None
 
 
@@ -83,8 +84,11 @@ def should_skip(raw: str) -> bool:
 def normalize_bank_name(raw: str) -> str:
     """銀行の口座名義から照合用のカナ名を抽出・正規化する"""
 
-    # 1. 濁点・半濁点の文字結合（NFCで結合）
-    s = unicodedata.normalize('NFC', raw)
+    # 1. 独立濁点(U+309B)→結合用濁点(U+3099)、独立半濁点(U+309C)→結合用半濁点(U+309A)に置換してNFCで結合
+    s = raw.replace('゛', '゙').replace('゜', '゚')
+    s = unicodedata.normalize('NFC', s)
+    # 全角ハイフン・ダッシュ類を長音符に統一（－U+FF0D, −U+2212, —U+2014 等）
+    s = re.sub(r'[－−—–]', 'ー', s)
 
     # 2. 先頭のノイズ除去（全角・半角数字、括弧類、英数字プレフィックス）
     s = re.sub(r'^[０-９0-9\(\)（）「」\-―A-ZＡ-Ｚa-zａ-ｚ]+', '', s).strip()
@@ -111,6 +115,17 @@ def extract_name(raw: str) -> str | None:
     if not re.search(r'[ァ-ヶ]', name):
         return None
     return name
+
+
+def extract_paren_names(raw: str) -> list[str]:
+    """括弧内のカナ名を正規化して返す（複数括弧対応）"""
+    results = []
+    for m in re.finditer(r'[（(]([^）)]+)[）)]', raw):
+        inner = m.group(1)
+        normalized = normalize_bank_name(inner)
+        if normalized and re.search(r'[ァ-ヶ]', normalized):
+            results.append(normalize_for_match(normalized))
+    return results
 
 
 # ── 第1段階：正規化完全一致 ──────────────────────────────────────────────
@@ -285,15 +300,25 @@ def match_record(raw_bank_name: str, rakuraku_records: list[dict], mode: str = "
             logger.info(f"[識別番号不一致] {raw_bank_name} → 振込識別番号={furikomi_id} に一致なし、カナ照合へ")
 
     bank_normalized = normalize_for_match(bank_name)
+    paren_names = extract_paren_names(raw_bank_name)
 
-    # 第1段階：完全一致
-    exact = find_exact_match(bank_normalized, rakuraku_records)
-    if exact:
-        logger.info(f"[完全一致] {bank_name} → {_get_kana(exact)} (記録ID={exact.get('記録ID')})")
-        return MatchResult.MATCHED, exact
+    # 第1段階：完全一致（括弧内の名前も含めて試みる）
+    for name_normalized in [bank_normalized] + paren_names:
+        exact = find_exact_match(name_normalized, rakuraku_records)
+        if exact:
+            logger.info(f"[完全一致] {bank_name} → {_get_kana(exact)} (記録ID={exact.get('記録ID')})")
+            return MatchResult.MATCHED, exact
 
-    # 第2段階：Gemini照合
-    candidates = get_candidates(bank_normalized, rakuraku_records)
+    # 第2段階：Gemini照合（括弧内の名前も含めて候補を集める）
+    candidates = []
+    seen_ids = set()
+    for name_normalized in [bank_normalized] + paren_names:
+        for rec in get_candidates(name_normalized, rakuraku_records):
+            rec_id = rec.get('記録ID')
+            if rec_id not in seen_ids:
+                candidates.append(rec)
+                seen_ids.add(rec_id)
+
     if not candidates:
         logger.info(f"[候補なし] {bank_name} → フリカナ未登録")
         return MatchResult.NO_KANA, None
