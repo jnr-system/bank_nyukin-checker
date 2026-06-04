@@ -1,0 +1,11 @@
+[Unit]
+Description=Bank Nyukin Checker
+After=network.target
+
+[Service]
+User=root
+WorkingDirectory=/root/project/bank_nyukin-checker
+ExecStart=/usr/bin/python3 main.py
+EnvironmentFile=/root/project/bank_nyukin-checker/.env
+StandardOutput=journal
+StandardError=journal
