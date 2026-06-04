@@ -78,7 +78,7 @@ def main() -> None:
     sheet_only: bool = args.sheet_only
     sheet_name: str | None = args.sheet
 
-    load_dotenv()
+    load_dotenv(override=True)
     setup_logging(dry_run, sheet_only)
     logger = logging.getLogger(__name__)
 
