@@ -227,16 +227,27 @@ def match_record_kanji(raw_bank_name: str, rakuraku_records: list[dict]) -> tupl
     return MatchResult.NO_MATCH, None
 
 
+def normalize_tehai_no(tehai_no: str) -> str:
+    """手配番号末尾のサフィックスを正規化する
+    - JNR-00001-2  → JNR-00001   （-数字のみ → 丸ごと除去）
+    - JNR-00001-S1 → JNR-00001-S （-英字+数字 → 末尾の数字のみ除去）
+    """
+    s = tehai_no.strip()
+    s = re.sub(r'(-[A-Za-z]+)\d+$', r'\1', s)  # -S1 → -S
+    s = re.sub(r'-\d+$', '', s)                  # -2  → 除去
+    return s
+
+
 def match_record_tehai(tehai_no: str, rakuraku_records: list[dict]) -> tuple[str, dict | None]:
-    """手配番号の完全一致で楽楽レコードを返す"""
-    n = tehai_no.strip()
+    """手配番号の完全一致で楽楽レコードを返す（末尾の -1/-2 等は無視）"""
+    n = normalize_tehai_no(tehai_no)
     if not n:
         return MatchResult.SKIP, None
     for rec in rakuraku_records:
-        if rec.get("手配番号", "").strip() == n:
-            logger.info(f"[手配番号一致] {n} (記録ID={rec.get('記録ID')})")
+        if normalize_tehai_no(rec.get("手配番号", "")) == n:
+            logger.info(f"[手配番号一致] {tehai_no} → {n} (記録ID={rec.get('記録ID')})")
             return MatchResult.MATCHED, rec
-    logger.info(f"[手配番号不一致] {n} → NO_MATCH")
+    logger.info(f"[手配番号不一致] {tehai_no} → {n} → NO_MATCH")
     return MatchResult.NO_MATCH, None
 
 

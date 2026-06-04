@@ -23,6 +23,9 @@ python main.py --dry-run
 
 # スプシのみ更新（楽楽フラグ更新・SMS送信はスキップ）
 python main.py --sheet-only
+
+# SMS送信スキップ（スプシ・楽楽は更新）
+python main.py --no-sms
 ```
 
 テスト・リントの設定は存在しない。

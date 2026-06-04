@@ -5,6 +5,7 @@ Usage:
     python3 main.py                    # 当月シート（例: 202604）で本番実行
     python3 main.py --sheet 202603     # 指定月シートで実行
     python3 main.py --dry-run          # ドライラン（照合のみ・更新なし）
+    python3 main.py --no-sms           # SMS送信スキップ（スプシ・楽楽は更新）
 """
 
 import argparse
@@ -43,7 +44,7 @@ LOG_DIR = Path("logs")
 LOG_FILE = LOG_DIR / "matching.log"
 
 
-def setup_logging(dry_run: bool, sheet_only: bool = False) -> None:
+def setup_logging(dry_run: bool, sheet_only: bool = False, no_sms: bool = False) -> None:
     LOG_DIR.mkdir(exist_ok=True)
 
     log_format = "%(asctime)s [%(levelname)s] %(message)s"
@@ -62,6 +63,8 @@ def setup_logging(dry_run: bool, sheet_only: bool = False) -> None:
         mode = "DRY-RUN"
     elif sheet_only:
         mode = "スプシのみ"
+    elif no_sms:
+        mode = "SMS送信スキップ"
     else:
         mode = "本番"
     logging.getLogger(__name__).info(f"=== 銀行振込照合ツール 起動（{mode}モード）===")
@@ -82,6 +85,11 @@ def main() -> None:
         help="スプシのみ更新（楽楽フラグ更新・SMS送信はスキップ）",
     )
     parser.add_argument(
+        "--no-sms",
+        action="store_true",
+        help="SMS送信スキップ（スプシ・楽楽は更新）",
+    )
+    parser.add_argument(
         "--sheet",
         default=None,
         metavar="YYYYMM",
@@ -90,10 +98,11 @@ def main() -> None:
     args = parser.parse_args()
     dry_run: bool = args.dry_run
     sheet_only: bool = args.sheet_only
+    no_sms: bool = args.no_sms
     sheet_name: str | None = args.sheet
 
     load_dotenv()
-    setup_logging(dry_run, sheet_only)
+    setup_logging(dry_run, sheet_only, no_sms)
     logger = logging.getLogger(__name__)
 
     # ── 1. 楽楽販売 顧客データ全件取得 ──────────────────────────────────
@@ -237,8 +246,8 @@ def main() -> None:
                     toiawase_id = matched_rec.get("問い合わせ管理リンク", "").strip()
                     rakuraku.update_kinfu_flags(rec_id, toiawase_id, nyukin_date=date_value, dry_run=dry_run)
 
-                # SMS送信（シート設定でsend_sms=Trueの場合のみ）
-                if config.get("send_sms", False):
+                # SMS送信（シート設定でsend_sms=True かつ no_smsでない場合のみ）
+                if config.get("send_sms", False) and not no_sms:
                     telno = ""
                     for col in TELNO_COLUMNS:
                         telno = matched_rec.get(col, "").strip()
