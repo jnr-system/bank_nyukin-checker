@@ -211,19 +211,20 @@ def main() -> None:
 
                 # 金額チェック（スプシ・楽楽両方に値があり一致する場合のみ通過）
                 rakuraku_amount = get_rakuraku_amount(matched_rec)
+                tehai_suffix = f"/{tehai_no}" if tehai_no else ""
                 if amount_value == 0:
                     logger.warning(f"行{row_idx}: [{name_value}] → スプシ金額が未入力")
-                    spreadsheet.write_result(ws, row_idx, "要確認（金額未入力）", dry_run=dry_run)
+                    spreadsheet.write_result(ws, row_idx, f"要確認（金額未入力）{tehai_suffix}", dry_run=dry_run)
                     stats["amount_mismatch"] += 1
                     continue
                 if rakuraku_amount == 0:
                     logger.warning(f"行{row_idx}: [{name_value}] → 楽楽金額が未入力")
-                    spreadsheet.write_result(ws, row_idx, "要確認（金額未入力）", dry_run=dry_run)
+                    spreadsheet.write_result(ws, row_idx, f"要確認（金額未入力）{tehai_suffix}", dry_run=dry_run)
                     stats["amount_mismatch"] += 1
                     continue
                 if amount_value != rakuraku_amount:
                     logger.warning(f"行{row_idx}: [{name_value}] → 金額不一致（スプシ: {amount_value}, 楽楽: {rakuraku_amount}）")
-                    spreadsheet.write_result(ws, row_idx, "要確認（金額不一致）", dry_run=dry_run)
+                    spreadsheet.write_result(ws, row_idx, f"要確認（金額不一致）{tehai_suffix}", dry_run=dry_run)
                     stats["amount_mismatch"] += 1
                     continue
 
