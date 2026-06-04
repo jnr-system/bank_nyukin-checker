@@ -5,11 +5,13 @@ Usage:
     python3 main.py                    # 当月シート（例: 202604）で本番実行
     python3 main.py --sheet 202603     # 指定月シートで実行
     python3 main.py --dry-run          # ドライラン（照合のみ・更新なし）
+    python3 main.py --no-sms           # SMS送信スキップ（スプシ・楽楽は更新）
 """
 
 import argparse
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -23,13 +25,26 @@ from matching import MatchResult, match_record
 # 楽楽販売CSVの電話番号列名
 TELNO_COLUMNS = ["（日程調整）請求先電話番号_1", "（日程調整）請求先電話番号_2"]
 
+def extract_amount(amount_str: str) -> int:
+    """金額文字列（カンマ入り、円など）から数値を抽出"""
+    s = re.sub(r'[^\d]', '', str(amount_str))
+    return int(s) if s else 0
+
+def get_rakuraku_amount(rec: dict) -> int:
+    """楽楽側の金額を取得。"""
+    for col in ["（日程調整）請求金額（税込）", "（日程調整）請求金額", "請求金額"]:
+        val = rec.get(col, "").strip()
+        if val:
+            return extract_amount(val)
+    return 0
+
 # ── ログ設定 ─────────────────────────────────────────────────────────────
 
 LOG_DIR = Path("logs")
 LOG_FILE = LOG_DIR / "matching.log"
 
 
-def setup_logging(dry_run: bool, sheet_only: bool = False) -> None:
+def setup_logging(dry_run: bool, sheet_only: bool = False, no_sms: bool = False) -> None:
     LOG_DIR.mkdir(exist_ok=True)
 
     log_format = "%(asctime)s [%(levelname)s] %(message)s"
@@ -48,6 +63,8 @@ def setup_logging(dry_run: bool, sheet_only: bool = False) -> None:
         mode = "DRY-RUN"
     elif sheet_only:
         mode = "スプシのみ"
+    elif no_sms:
+        mode = "SMS送信スキップ"
     else:
         mode = "本番"
     logging.getLogger(__name__).info(f"=== 銀行振込照合ツール 起動（{mode}モード）===")
@@ -68,6 +85,11 @@ def main() -> None:
         help="スプシのみ更新（楽楽フラグ更新・SMS送信はスキップ）",
     )
     parser.add_argument(
+        "--no-sms",
+        action="store_true",
+        help="SMS送信スキップ（スプシ・楽楽は更新）",
+    )
+    parser.add_argument(
         "--sheet",
         default=None,
         metavar="YYYYMM",
@@ -76,22 +98,14 @@ def main() -> None:
     args = parser.parse_args()
     dry_run: bool = args.dry_run
     sheet_only: bool = args.sheet_only
+    no_sms: bool = args.no_sms
     sheet_name: str | None = args.sheet
 
     load_dotenv(override=True)
-    setup_logging(dry_run, sheet_only)
+    setup_logging(dry_run, sheet_only, no_sms)
     logger = logging.getLogger(__name__)
 
-    # ── 1. スプレッドシート読み込み ──────────────────────────────────────
-    logger.info("スプレッドシートに接続中...")
-    ws = spreadsheet._get_worksheet(sheet_name)
-    sheet_rows = spreadsheet.get_sheet_rows(ws)
-
-    # 処理対象行を絞る（B列が「照合済み」で始まる行はスキップ）
-    target_rows = [r for r in sheet_rows if not r["b"].startswith("照合済み")]
-    logger.info(f"処理対象: {len(target_rows)}行（全{len(sheet_rows)}行中）")
-
-    # ── 2. 楽楽販売 顧客データ全件取得 ──────────────────────────────────
+    # ── 1. 楽楽販売 顧客データ全件取得 ──────────────────────────────────
     logger.info("楽楽販売から顧客データを取得中...")
     all_records = rakuraku.fetch_all_records()
 
@@ -109,9 +123,41 @@ def main() -> None:
     }
     logger.info(f"楽楽販売: 既に「入金確認済み」のレコード {len(already_confirmed_ids)}件")
 
+    # 当日ループ内で既に照合した注文IDを保持するセット
+    matched_order_ids = set()
+
+    # ── 3. スプレッドシート読み込み＆照合処理 ──────────────────────────────────────
+    SPREADSHEETS_CONFIG = []
+    for i in range(1, 5):
+        sp_id = os.environ.get(f"SPREADSHEET_ID_{i}")
+        if sp_id:
+            sms_flag = os.environ.get(f"SPREADSHEET_SMS_{i}", "false").lower() == "true"
+            SPREADSHEETS_CONFIG.append({
+                "id": sp_id,
+                "mode": os.environ.get(f"SPREADSHEET_MATCH_MODE_{i}", "kana"),
+                "name_col": os.environ.get(f"SPREADSHEET_NAME_COL_{i}", "D"),
+                "date_col": os.environ.get(f"SPREADSHEET_DATE_COL_{i}", "C"),
+                "amount_col": os.environ.get(f"SPREADSHEET_AMOUNT_COL_{i}", "E"),
+                "send_sms": sms_flag,
+            })
+    
+    # 後方互換性
+    if not SPREADSHEETS_CONFIG and "SPREADSHEET_ID" in os.environ:
+        SPREADSHEETS_CONFIG.append({
+            "id": os.environ["SPREADSHEET_ID"],
+            "mode": "kana",
+            "name_col": "D",
+            "date_col": "C",
+            "amount_col": "E",
+            "send_sms": True,
+        })
+
+    logger.info(f"設定されているスプレッドシートは {len(SPREADSHEETS_CONFIG)} 件です。")
+
     # ── 3. 照合処理 ──────────────────────────────────────────────────────
     stats = {
         "matched": 0,
+        "amount_mismatch": 0,
         "no_match": 0,
         "skip": 0,
         "no_kana": 0,
@@ -120,87 +166,131 @@ def main() -> None:
         "sms_sent": 0,
         "sms_failed": 0,
     }
+    
+    total_target_rows = 0
 
-    for row in target_rows:
-        row_idx = row["row_index"]
-        d_value = row["d"]
+    for idx, config in enumerate(SPREADSHEETS_CONFIG, start=1):
+        logger.info(f"--- スプレッドシート {idx}件目 の処理を開始します ---")
+        os.environ["SPREADSHEET_ID"] = config["id"] # _get_worksheetが参照するため一時的に上書き
+        ws = spreadsheet._get_worksheet(sheet_name)
+        sheet_rows = spreadsheet.get_sheet_rows(
+            ws, 
+            name_col=config["name_col"], 
+            date_col=config["date_col"], 
+            amount_col=config["amount_col"]
+        )
 
-        if not d_value:
-            logger.debug(f"行{row_idx}: D列が空のためスキップ")
-            stats["skip"] += 1
-            continue
+        # 処理対象行を絞る（A列に「照合済み」または「要確認」を含む行はスキップ）
+        target_rows = [r for r in sheet_rows if "照合済み" not in r["result"] and "要確認" not in r["result"]]
+        total_target_rows += len(target_rows)
+        logger.info(f"処理対象: {len(target_rows)}行（全{len(sheet_rows)}行中）")
 
-        result_type, matched_rec = match_record(d_value, rakuraku_records)
+        for row in target_rows:
+            row_idx = row["row_index"]
+            name_value = row["name"]
+            date_value = row["date"].replace("-", "/") # YYYY/MM/DD に統一
+            amount_value = extract_amount(row["amount"])
 
-        if result_type == MatchResult.SKIP:
-            logger.info(f"行{row_idx}: [{d_value}] → スキップ（法人・手数料等）")
-            spreadsheet.write_result(ws, row_idx, "要確認", dry_run=dry_run)
-            stats["skip"] += 1
-            continue
-
-        elif result_type == MatchResult.MATCHED:
-            rec_id = matched_rec.get("注文ID", "")
-            tebai_no = matched_rec.get("手配番号", "")
-
-            # 楽楽側が既に入金確認済みの場合もスキップ
-            if rec_id in already_confirmed_ids:
-                logger.info(f"行{row_idx}: [{d_value}] → 楽楽側で既に入金確認済み（スキップ）")
-                spreadsheet.write_result(ws, row_idx, "照合済み（楽楽確認済み）", dry_run=dry_run)
-                stats["already_confirmed"] += 1
+            if not name_value:
+                logger.debug(f"行{row_idx}: 名義が空のためスキップ")
+                stats["skip"] += 1
                 continue
 
-            # スプシB列に照合済み（手配番号）を書き込み
-            spreadsheet.write_result(ws, row_idx, f"照合済み（{tebai_no}）", dry_run=dry_run)
+            result_type, matched_rec = match_record(name_value, rakuraku_records, mode=config["mode"])
 
-            # 楽楽販売フラグ更新・SMS送信（sheet_onlyモードはスキップ）
-            if sheet_only:
-                logger.info(f"行{row_idx}: [{d_value}] → [SHEET-ONLY] 楽楽更新・SMS送信スキップ")
-            else:
-                # 楽楽販売フラグ更新（成約管理DB + 問合せ管理DB）
-                toiawase_id = matched_rec.get("問い合わせ管理リンク", "").strip()
-                rakuraku.update_kinfu_flags(rec_id, toiawase_id, dry_run=dry_run)
+            if result_type == MatchResult.SKIP:
+                skip_reason = "手配番号が空" if config["mode"] == "tehai" else "法人・手数料等"
+                logger.info(f"行{row_idx}: [{name_value}] → スキップ（{skip_reason}）")
+                spreadsheet.write_result(ws, row_idx, "要確認", dry_run=dry_run)
+                stats["skip"] += 1
+                continue
 
-                # SMS送信（電話番号_1 → なければ _2 を使用）
-                telno = ""
-                for col in TELNO_COLUMNS:
-                    telno = matched_rec.get(col, "").strip()
-                    if telno:
-                        break
+            elif result_type == MatchResult.MATCHED:
+                rec_id = matched_rec.get("注文ID", "")
+                tehai_no = matched_rec.get("手配番号", "")
 
-                if telno:
-                    ok = sms.send_sms(telno, tebai_no, dry_run=dry_run)
-                    if ok:
-                        stats["sms_sent"] += 1
-                    else:
-                        stats["sms_failed"] += 1
+                # 金額チェック（スプシ・楽楽両方に値があり一致する場合のみ通過）
+                rakuraku_amount = get_rakuraku_amount(matched_rec)
+                if amount_value == 0:
+                    logger.warning(f"行{row_idx}: [{name_value}] → スプシ金額が未入力")
+                    spreadsheet.write_result(ws, row_idx, "要確認（金額未入力）", dry_run=dry_run)
+                    stats["amount_mismatch"] += 1
+                    continue
+                if rakuraku_amount == 0:
+                    logger.warning(f"行{row_idx}: [{name_value}] → 楽楽金額が未入力")
+                    spreadsheet.write_result(ws, row_idx, "要確認（金額未入力）", dry_run=dry_run)
+                    stats["amount_mismatch"] += 1
+                    continue
+                if amount_value != rakuraku_amount:
+                    logger.warning(f"行{row_idx}: [{name_value}] → 金額不一致（スプシ: {amount_value}, 楽楽: {rakuraku_amount}）")
+                    spreadsheet.write_result(ws, row_idx, "要確認（金額不一致）", dry_run=dry_run)
+                    stats["amount_mismatch"] += 1
+                    continue
+
+                # 楽楽側が既に入金確認済み、または当日別スプシで確認済みの場合もスキップ
+                if rec_id in already_confirmed_ids or rec_id in matched_order_ids:
+                    logger.info(f"行{row_idx}: [{name_value}] → 楽楽側で既に入金確認済み（スキップ）")
+                    spreadsheet.write_result(ws, row_idx, "照合済み（楽楽確認済み）", dry_run=dry_run)
+                    stats["already_confirmed"] += 1
+                    continue
+
+                # スプシA列に照合済み（手配番号）を書き込み
+                spreadsheet.write_result(ws, row_idx, f"照合済み（{tehai_no}）", dry_run=dry_run)
+                matched_order_ids.add(rec_id)
+
+                # 楽楽販売フラグ更新・SMS送信（sheet_onlyモードはスキップ）
+                if sheet_only:
+                    logger.info(f"行{row_idx}: [{name_value}] → [SHEET-ONLY] 楽楽更新・SMS送信スキップ")
                 else:
-                    logger.warning(f"行{row_idx}: [{d_value}] → 電話番号未登録のためSMSスキップ")
+                    # 楽楽販売フラグ更新（成約管理DB + 問合せ管理DB）
+                    toiawase_id = matched_rec.get("問い合わせ管理リンク", "").strip()
+                    rakuraku.update_kinfu_flags(rec_id, toiawase_id, nyukin_date=date_value, dry_run=dry_run)
 
-            stats["matched"] += 1
+                # SMS送信（シート設定でsend_sms=True かつ no_smsでない場合のみ）
+                if config.get("send_sms", False) and not no_sms:
+                    telno = ""
+                    for col in TELNO_COLUMNS:
+                        telno = matched_rec.get(col, "").strip()
+                        if telno:
+                            break
 
-        elif result_type == MatchResult.NO_MATCH:
-            spreadsheet.write_result(ws, row_idx, "要確認", dry_run=dry_run)
-            stats["no_match"] += 1
+                    if telno:
+                        ok = sms.send_sms(telno, tehai_no, date=date_value, amount=str(amount_value), dry_run=dry_run)
+                        if ok:
+                            stats["sms_sent"] += 1
+                        else:
+                            stats["sms_failed"] += 1
+                    else:
+                        logger.warning(f"行{row_idx}: [{name_value}] → 電話番号未登録のためSMSスキップ")
+                else:
+                    logger.info(f"行{row_idx}: [{name_value}] → SMS送信なし（シート設定）")
 
-        elif result_type == MatchResult.NO_KANA:
-            spreadsheet.write_result(ws, row_idx, "要確認（フリカナ未登録）", dry_run=dry_run)
-            stats["no_kana"] += 1
+                stats["matched"] += 1
 
-        elif result_type == MatchResult.ERROR:
-            spreadsheet.write_result(ws, row_idx, "要確認（エラー）", dry_run=dry_run)
-            stats["error"] += 1
+            elif result_type == MatchResult.NO_MATCH:
+                spreadsheet.write_result(ws, row_idx, "要確認", dry_run=dry_run)
+                stats["no_match"] += 1
+
+            elif result_type == MatchResult.NO_KANA:
+                spreadsheet.write_result(ws, row_idx, "要確認（フリカナ未登録）", dry_run=dry_run)
+                stats["no_kana"] += 1
+
+            elif result_type == MatchResult.ERROR:
+                spreadsheet.write_result(ws, row_idx, "要確認（エラー）", dry_run=dry_run)
+                stats["error"] += 1
 
     # ── 4. 集計ログ ──────────────────────────────────────────────────────
-    logger.info("=== 処理完了 ===")
+    logger.info("=== 全スプレッドシート処理完了 ===")
     logger.info(f"  照合済み（MATCH）  : {stats['matched']}件")
     logger.info(f"  要確認（NO_MATCH） : {stats['no_match']}件")
+    logger.info(f"  要確認（金額不一致）: {stats['amount_mismatch']}件")
     logger.info(f"  要確認（候補なし） : {stats['no_kana']}件")
     logger.info(f"  要確認（エラー）   : {stats['error']}件")
     logger.info(f"  スキップ           : {stats['skip']}件")
     logger.info(f"  楽楽側照合済み済   : {stats['already_confirmed']}件")
     logger.info(f"  SMS送信成功        : {stats['sms_sent']}件")
     logger.info(f"  SMS送信失敗        : {stats['sms_failed']}件")
-    logger.info(f"  合計処理対象       : {len(target_rows)}行")
+    logger.info(f"  合計処理対象       : {total_target_rows}行")
 
 
 if __name__ == "__main__":

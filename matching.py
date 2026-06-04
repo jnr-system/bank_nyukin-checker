@@ -203,7 +203,55 @@ class MatchResult:
     NO_KANA = "no_kana"
 
 
-def match_record(raw_bank_name: str, rakuraku_records: list[dict]) -> tuple[str, dict | None]:
+def normalize_kanji_for_match(name: str) -> str:
+    """漢字名義用に正規化：スペース除去・全角統一"""
+    n = unicodedata.normalize('NFKC', name)
+    n = re.sub(r'[\s　\xa0]', '', n)
+    return n
+
+def match_record_kanji(raw_bank_name: str, rakuraku_records: list[dict]) -> tuple[str, dict | None]:
+    n_bank = normalize_kanji_for_match(raw_bank_name)
+    if not n_bank:
+        return MatchResult.SKIP, None
+        
+    for rec in rakuraku_records:
+        r_name = rec.get("（日程調整）請求先お名前", "").strip()
+        if not r_name:
+            continue
+        n_r_name = normalize_kanji_for_match(r_name)
+        if n_bank == n_r_name:
+            logger.info(f"[漢字完全一致] {n_bank} (記録ID={rec.get('記録ID')})")
+            return MatchResult.MATCHED, rec
+            
+    logger.info(f"[漢字不一致] {n_bank} → NO_MATCH")
+    return MatchResult.NO_MATCH, None
+
+
+def normalize_tehai_no(tehai_no: str) -> str:
+    """手配番号末尾のサフィックスを正規化する
+    - JNR-00001-2  → JNR-00001   （-数字のみ → 丸ごと除去）
+    - JNR-00001-S1 → JNR-00001-S （-英字+数字 → 末尾の数字のみ除去）
+    """
+    s = tehai_no.strip()
+    s = re.sub(r'(-[A-Za-z]+)\d+$', r'\1', s)  # -S1 → -S
+    s = re.sub(r'-\d+$', '', s)                  # -2  → 除去
+    return s
+
+
+def match_record_tehai(tehai_no: str, rakuraku_records: list[dict]) -> tuple[str, dict | None]:
+    """手配番号の完全一致で楽楽レコードを返す（末尾の -1/-2 等は無視）"""
+    n = normalize_tehai_no(tehai_no)
+    if not n:
+        return MatchResult.SKIP, None
+    for rec in rakuraku_records:
+        if normalize_tehai_no(rec.get("手配番号", "")) == n:
+            logger.info(f"[手配番号一致] {tehai_no} → {n} (記録ID={rec.get('記録ID')})")
+            return MatchResult.MATCHED, rec
+    logger.info(f"[手配番号不一致] {tehai_no} → {n} → NO_MATCH")
+    return MatchResult.NO_MATCH, None
+
+
+def match_record(raw_bank_name: str, rakuraku_records: list[dict], mode: str = "kana") -> tuple[str, dict | None]:
     """
     1件の銀行口座名義を照合する。
 
@@ -211,6 +259,12 @@ def match_record(raw_bank_name: str, rakuraku_records: list[dict]) -> tuple[str,
         (result_type, matched_record_or_None)
         result_type: MatchResult の定数
     """
+    if mode == "kanji":
+        return match_record_kanji(raw_bank_name, rakuraku_records)
+
+    if mode == "tehai":
+        return match_record_tehai(raw_bank_name, rakuraku_records)
+
     # 第0段階：スキップ判定
     bank_name = extract_name(raw_bank_name)
     if bank_name is None:
