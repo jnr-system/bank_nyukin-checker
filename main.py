@@ -223,8 +223,9 @@ def main() -> None:
                     stats["amount_mismatch"] += 1
                     continue
                 if amount_value != rakuraku_amount:
-                    logger.warning(f"行{row_idx}: [{name_value}] → 金額不一致（スプシ: {amount_value}, 楽楽: {rakuraku_amount}）")
-                    spreadsheet.write_result(ws, row_idx, f"要確認（金額不一致）{tehai_suffix}", dry_run=dry_run)
+                    diff = rakuraku_amount - amount_value
+                    logger.warning(f"行{row_idx}: [{name_value}] → 金額不一致（スプシ: {amount_value}, 楽楽: {rakuraku_amount}, 差額: {diff}）")
+                    spreadsheet.write_result(ws, row_idx, f"要確認（金額不一致 差額{diff:,}円）{tehai_suffix}", dry_run=dry_run)
                     stats["amount_mismatch"] += 1
                     continue
 
