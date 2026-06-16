@@ -90,6 +90,11 @@ def main() -> None:
         help="SMS送信スキップ（スプシ・楽楽は更新）",
     )
     parser.add_argument(
+        "--fill-tehai",
+        action="store_true",
+        help="楽楽確認済みの行にも手配番号をB列へ反映する",
+    )
+    parser.add_argument(
         "--sheet",
         default=None,
         metavar="YYYYMM",
@@ -99,6 +104,7 @@ def main() -> None:
     dry_run: bool = args.dry_run
     sheet_only: bool = args.sheet_only
     no_sms: bool = args.no_sms
+    fill_tehai: bool = args.fill_tehai
     sheet_name: str | None = args.sheet
 
     load_dotenv(override=True)
@@ -211,33 +217,36 @@ def main() -> None:
 
                 # 金額チェック（スプシ・楽楽両方に値があり一致する場合のみ通過）
                 rakuraku_amount = get_rakuraku_amount(matched_rec)
-                tehai_suffix = f"/{tehai_no}" if tehai_no else ""
                 if amount_value == 0:
                     logger.warning(f"行{row_idx}: [{name_value}] → スプシ金額が未入力")
-                    spreadsheet.write_result(ws, row_idx, f"要確認（金額未入力）{tehai_suffix}", dry_run=dry_run)
+                    spreadsheet.write_result(ws, row_idx, "要確認（金額未入力）", tehai_no=tehai_no, dry_run=dry_run)
                     stats["amount_mismatch"] += 1
                     continue
                 if rakuraku_amount == 0:
                     logger.warning(f"行{row_idx}: [{name_value}] → 楽楽金額が未入力")
-                    spreadsheet.write_result(ws, row_idx, f"要確認（金額未入力）{tehai_suffix}", dry_run=dry_run)
+                    spreadsheet.write_result(ws, row_idx, "要確認（金額未入力）", tehai_no=tehai_no, dry_run=dry_run)
                     stats["amount_mismatch"] += 1
                     continue
                 if amount_value != rakuraku_amount:
                     diff = rakuraku_amount - amount_value
                     logger.warning(f"行{row_idx}: [{name_value}] → 金額不一致（スプシ: {amount_value}, 楽楽: {rakuraku_amount}, 差額: {diff}）")
-                    spreadsheet.write_result(ws, row_idx, f"要確認（金額不一致 差額{diff:,}円）{tehai_suffix}", dry_run=dry_run)
+                    spreadsheet.write_result(ws, row_idx, f"要確認（金額不一致 差額{diff:,}円）", tehai_no=tehai_no, dry_run=dry_run)
                     stats["amount_mismatch"] += 1
                     continue
 
                 # 楽楽側が既に入金確認済み、または当日別スプシで確認済みの場合もスキップ
                 if rec_id in already_confirmed_ids or rec_id in matched_order_ids:
                     logger.info(f"行{row_idx}: [{name_value}] → 楽楽側で既に入金確認済み（スキップ）")
-                    spreadsheet.write_result(ws, row_idx, "照合済み（楽楽確認済み）", dry_run=dry_run)
+                    spreadsheet.write_result(
+                        ws, row_idx, "照合済み（楽楽確認済み）",
+                        tehai_no=tehai_no if fill_tehai else "",
+                        dry_run=dry_run,
+                    )
                     stats["already_confirmed"] += 1
                     continue
 
-                # スプシA列に照合済み（手配番号）を書き込み
-                spreadsheet.write_result(ws, row_idx, f"照合済み（{tehai_no}）", dry_run=dry_run)
+                # スプシA列に照合結果、B列に手配番号を書き込み
+                spreadsheet.write_result(ws, row_idx, "照合済み", tehai_no=tehai_no, dry_run=dry_run)
                 matched_order_ids.add(rec_id)
 
                 # 楽楽販売フラグ更新・SMS送信（sheet_onlyモードはスキップ）

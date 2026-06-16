@@ -26,6 +26,9 @@ python main.py --sheet-only
 
 # SMS送信スキップ（スプシ・楽楽は更新）
 python main.py --no-sms
+
+# 楽楽確認済みの行にも手配番号をB列へ反映
+python main.py --fill-tehai
 ```
 
 テスト・リントの設定は存在しない。

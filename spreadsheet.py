@@ -88,27 +88,35 @@ def write_result(
     worksheet: gspread.Worksheet,
     row_index: int,
     result: str,
+    tehai_no: str = "",
     dry_run: bool = False,
 ) -> None:
     """
-    B列に照合結果を書き込む。
+    A列に照合結果、B列に手配番号を書き込む。
 
     Args:
         worksheet: 対象ワークシート
         row_index: 書き込む行番号（1始まり）
-        result: 書き込む文字列（例: "照合済み（2026-04-15 10:32）" or "要確認"）
+        result: A列に書き込む文字列（例: "照合済み" or "要確認"）
+        tehai_no: B列に書き込む手配番号（空の場合はB列を更新しない）
         dry_run: Trueの場合は書き込まずログのみ
     """
     if dry_run:
-        logger.info(f"[DRY-RUN] 行{row_index} A列 ← {result!r}（スキップ）")
+        logger.info(f"[DRY-RUN] 行{row_index} A列 ← {result!r} / B列 ← {tehai_no!r}（スキップ）")
         return
 
     cell_addr = f"A{row_index}"
     fg = {"red": 1.0, "green": 0.0, "blue": 0.0} if result.startswith("要確認") else {"red": 0.0, "green": 0.0, "blue": 0.0}
-    worksheet.batch_update([{
+    updates = [{
         "range": cell_addr,
         "values": [[result]],
-    }])
+    }]
+    if tehai_no:
+        updates.append({
+            "range": f"B{row_index}",
+            "values": [[tehai_no]],
+        })
+    worksheet.batch_update(updates)
     time.sleep(0.5)
     worksheet.format(cell_addr, {
         "backgroundColor": {"red": 1.0, "green": 1.0, "blue": 1.0},
@@ -116,6 +124,6 @@ def write_result(
     })
     time.sleep(0.5)
 
-    logger.debug(f"スプレッドシート: 行{row_index} A列 ← {result!r}")
+    logger.debug(f"スプレッドシート: 行{row_index} A列 ← {result!r} / B列 ← {tehai_no!r}")
 
 
