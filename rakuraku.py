@@ -85,7 +85,11 @@ def _update_record(db_schema_id: str, record_id: str, values: dict, label: str) 
         time.sleep(REQUEST_INTERVAL)
         return True
     except requests.RequestException as e:
-        logger.error(f"楽楽販売({label}): ID={record_id} の更新に失敗しました: {e}")
+        body = getattr(getattr(e, "response", None), "text", "") or ""
+        logger.error(
+            f"楽楽販売({label}): ID={record_id} の更新に失敗しました: {e} "
+            f"/ payload={values} / response={body}"
+        )
         return False
 
 
