@@ -5,6 +5,7 @@ rakuraku.py - 楽楽販売APIとの通信（顧客データ取得・フラグ更
 import os
 import csv
 import io
+import json
 import time
 import logging
 import requests
@@ -27,6 +28,30 @@ TOIAWASE_KINFU_ITEM_ID = "116376"  # 問合せ管理の照合済み項目ID
 
 KINFU_VALUE = "照合済み"
 REQUEST_INTERVAL = 1.0  # 秒（レート制限：1分20リクエスト）
+
+# 必須項目が未入力で更新が弾かれた場合に補完する値
+REQUIRED_FIELD_DEFAULT = "なし"
+
+
+def _missing_required_item_ids(body: str) -> list[str]:
+    """
+    更新失敗レスポンスから「'＊XXX'を入力してください。」で弾かれた
+    必須項目の項目IDを抽出する。
+    """
+    if not body:
+        return []
+    try:
+        data = json.loads(body)
+    except (ValueError, TypeError):
+        return []
+
+    headers = (data.get("errors") or {}).get("description", {}).get("header") or []
+    item_ids = []
+    for h in headers:
+        # value が空のまま「入力してください」と弾かれた必須項目を対象にする
+        if h.get("name") and not h.get("value") and "入力してください" in (h.get("msg") or ""):
+            item_ids.append(str(h["name"]))
+    return item_ids
 
 
 def _headers() -> dict:
@@ -66,8 +91,11 @@ def fetch_all_records(limit: int = 5000) -> list[dict]:
     return records
 
 
-def _update_record(db_schema_id: str, record_id: str, values: dict, label: str) -> bool:
-    """指定DBの指定レコードの複数項目を更新する共通処理"""
+def _update_record(db_schema_id: str, record_id: str, values: dict, label: str, _retried: bool = False) -> bool:
+    """指定DBの指定レコードの複数項目を更新する共通処理。
+
+    必須項目が未入力で弾かれた場合は、その項目に「なし」を補って1度だけ再試行する。
+    """
     payload = {
         "dbSchemaId": db_schema_id,
         "keyId": record_id,
@@ -86,6 +114,19 @@ def _update_record(db_schema_id: str, record_id: str, values: dict, label: str) 
         return True
     except requests.RequestException as e:
         body = getattr(getattr(e, "response", None), "text", "") or ""
+
+        # 必須項目が未入力で弾かれた場合は「なし」を補って1度だけ再試行する
+        if not _retried:
+            missing = [iid for iid in _missing_required_item_ids(body) if iid not in values]
+            if missing:
+                retry_values = {**values, **{iid: REQUIRED_FIELD_DEFAULT for iid in missing}}
+                logger.warning(
+                    f"楽楽販売({label}): ID={record_id} の必須項目 {missing} が未入力のため "
+                    f"「{REQUIRED_FIELD_DEFAULT}」を補って再試行します"
+                )
+                time.sleep(REQUEST_INTERVAL)
+                return _update_record(db_schema_id, record_id, retry_values, label, _retried=True)
+
         logger.error(
             f"楽楽販売({label}): ID={record_id} の更新に失敗しました: {e} "
             f"/ payload={values} / response={body}"
